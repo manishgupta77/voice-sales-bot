@@ -10,9 +10,9 @@ main{max-width:960px;margin:0 auto;padding:24px 16px;display:grid;gap:20px}
 h1{margin:0;font-size:1.6rem}h2{margin:0 0 10px;font-size:1.15rem}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
 .bar{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
-button,select{font:inherit;padding:9px 16px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+button,select,input[type=text]{font:inherit;padding:9px 16px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
 button{cursor:pointer;font-weight:bold}#start{background:var(--accent);color:#fff;border:0}#end{background:var(--red);color:#fff;border:0}
-button:disabled{opacity:.4;cursor:not-allowed}button:focus-visible,select:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+button:disabled{opacity:.4;cursor:not-allowed}button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
 #timer{font-variant-numeric:tabular-nums;font-size:1.3rem}#state{color:var(--mute)}
 #chat{height:320px;overflow-y:auto;display:flex;flex-direction:column;gap:8px}
 .m{max-width:80%;padding:8px 12px;border-radius:10px;border:1px solid var(--line)}
@@ -20,6 +20,7 @@ button:disabled{opacity:.4;cursor:not-allowed}button:focus-visible,select:focus-
 .badge{display:inline-block;padding:2px 10px;border-radius:99px;border:1px solid var(--accent);color:var(--accent);font-weight:bold;font-size:.85rem}
 .call{border-top:1px solid var(--line);padding:12px 0}.call:first-child{border:0}
 details{margin-top:6px;color:var(--mute)}audio{width:100%;margin-top:8px}.empty{color:var(--mute)}
+#log{margin:0;font:12px/1.5 monospace;white-space:pre-wrap;color:var(--mute);max-height:200px;overflow:auto}
 </style></head><body><main>
 <header><h1>FlowDesk Voice Sales Bot</h1>
 <div class="empty">Riya talks to you about FlowDesk, a CRM for small businesses. Use Chrome or Edge.</div></header>
@@ -31,7 +32,10 @@ details{margin-top:6px;color:var(--mute)}audio{width:100%;margin-top:8px}.empty{
 <button id="start">Start call</button><button id="end" disabled>End call</button>
 <span id="timer">00:00</span><span id="state">Idle</span></div></section>
 
-<section class="card"><h2>Live chat</h2><div id="chat" aria-live="polite"><div class="empty">Start a call to begin the conversation.</div></div></section>
+<section class="card"><h2>Live chat</h2><div id="chat" aria-live="polite"><div class="empty">Start a call to begin the conversation.</div></div>
+<div class="bar" style="margin-top:12px"><input type="text" id="txt" placeholder="Mic na chale to yahan type karo" style="flex:1;min-width:200px"><button id="send">Send</button></div></section>
+
+<section class="card"><h2>Debug log</h2><pre id="log">Abhi koi event nahi.</pre></section>
 
 <section class="card" id="result" hidden><h2>Call result</h2><div id="resultBody"></div></section>
 
@@ -43,10 +47,11 @@ const GREET={"en-IN":"Hello! I'm Riya from FlowDesk. We help small businesses ma
 "hi-IN":"नमस्ते! मैं रिया बोल रही हूँ, FlowDesk से। हम छोटे बिज़नेस को लीड्स और कस्टमर्स मैनेज करने में मदद करते हैं। क्या आपके पास एक मिनट है?",
 "te-IN":"నమస్కారం! నేను రియా, FlowDesk నుండి మాట్లాడుతున్నాను. చిన్న వ్యాపారాల లీడ్స్ నిర్వహణలో మేము సహాయం చేస్తాము. మీకు ఒక నిమిషం ఉందా?"};
 let active=false,lang,msgs=[],rec,stream,mr,chunks=[],t0,tick,busy=false,speaking=false,blocked=false;
-let buf="",silence=null;
+let buf="",silence=null;const L=[];
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const setState=s=>$("state").textContent=s;
+function log(s){L.push(new Date().toLocaleTimeString()+"  "+s);$("log").textContent=L.slice(-14).join("\n")}
 
 function add(role,text){
   msgs.push({role,text});
@@ -55,45 +60,51 @@ function add(role,text){
 }
 function speak(text){
   return new Promise(res=>{
-    speechSynthesis.cancel();speaking=true;setState("Riya is speaking...");
+    speechSynthesis.cancel();speaking=true;setState("Riya is speaking...");log("Riya bolna shuru");
     const u=new SpeechSynthesisUtterance(text);u.lang=lang;
     const v=speechSynthesis.getVoices().find(v=>v.lang.replace("_","-").startsWith(lang.slice(0,2)));if(v)u.voice=v;
     let done=false,guard=null;
-    const fin=()=>{if(done)return;done=true;clearTimeout(guard);speaking=false;res()};
+    const fin=()=>{if(done)return;done=true;clearTimeout(guard);speaking=false;log("Riya bolna khatam");res()};
     guard=setTimeout(fin,Math.max(4000,text.length*90));
     u.onend=fin;u.onerror=fin;speechSynthesis.speak(u);
   });
 }
 function listen(){
   if(!active||busy||speaking||blocked)return;
+  log("listen() chala, SR="+(SR?"ok":"NAHI"));
   rec=new SR();rec.lang=lang;rec.continuous=true;rec.interimResults=true;
-  rec.onstart=()=>setState("Listening... (bolo)");
+  rec.onstart=()=>{setState("Listening... (bolo)");log("recognition START hua")};
+  rec.onaudiostart=()=>log("mic audio mil raha hai");
+  rec.onspeechstart=()=>log("awaaz detect hui");
   rec.onresult=e=>{
     let t="";for(let i=0;i<e.results.length;i++)t+=e.results[i][0].transcript;
-    buf=t;setState("Listening: "+t);clearTimeout(silence);
+    buf=t;setState("Listening: "+t);log("suna: "+t);clearTimeout(silence);
     silence=setTimeout(()=>{const x=buf.trim();buf="";try{rec.stop()}catch(e){}if(x)handle(x)},1800);
   };
-  rec.onend=()=>{if(active&&!busy&&!speaking&&!blocked)setTimeout(listen,300)};
+  rec.onend=()=>{log("recognition END");if(active&&!busy&&!speaking&&!blocked)setTimeout(listen,300)};
   rec.onerror=e=>{
+    log("ERROR: "+e.error);
     if(e.error==="not-allowed"||e.error==="service-not-allowed"){blocked=true;setState("Mic blocked: browser me Microphone ko Allow karo, phir naya call karo")}
-    else if(e.error==="network"){setState("Speech service network error, dobara try ho raha hai...")}
+    else if(e.error==="network"){setState("Speech service network error")}
     else if(e.error!=="no-speech"&&e.error!=="aborted"){setState("Mic error: "+e.error)}
   };
-  try{rec.start()}catch(e){setState("Mic start error: "+e.message)}
+  try{rec.start()}catch(e){log("rec.start FAIL: "+e.message);setState("Mic start error: "+e.message)}
 }
 async function handle(text){
-  busy=true;add("user",text);setState("Thinking...");
+  busy=true;add("user",text);setState("Thinking...");log("server ko bheja: "+text);
   try{
     const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:msgs,lang})});
     const {reply}=await r.json();if(!active)return;
-    add("assistant",reply);await speak(reply);
-  }catch(e){setState("Server error")}
+    log("jawab aaya");add("assistant",reply);await speak(reply);
+  }catch(e){setState("Server error");log("server error: "+e.message)}
   busy=false;listen();
 }
 async function startCall(){
+  L.length=0;log("Start dabaya. Browser SpeechRecognition: "+(SR?"hai":"NAHI hai"));
   if(!SR)return alert("Speech recognition is not supported. Please use Chrome or Edge.");
   if(!$("consent").checked)return alert("Please tick the recording consent box first.");
-  try{stream=await navigator.mediaDevices.getUserMedia({audio:true})}catch(e){return alert("Microphone access is needed. Address bar ke lock icon se Microphone ko Allow karo.")}
+  try{stream=await navigator.mediaDevices.getUserMedia({audio:true});log("mic stream OK")}
+  catch(e){log("getUserMedia FAIL: "+e.name+" "+e.message);return alert("Microphone access is needed. Address bar ke lock icon se Microphone ko Allow karo.")}
   lang=$("lang").value;msgs=[];chunks=[];active=true;blocked=false;busy=false;$("chat").innerHTML="";$("result").hidden=true;
   mr=new MediaRecorder(stream);mr.ondataavailable=e=>chunks.push(e.data);mr.start();
   t0=Date.now();tick=setInterval(()=>{const s=Math.floor((Date.now()-t0)/1000);$("timer").textContent=String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0")},500);
@@ -101,7 +112,7 @@ async function startCall(){
   const g=GREET[lang];add("assistant",g);await speak(g);listen();
 }
 async function endCall(){
-  if(!active)return;active=false;clearInterval(tick);clearTimeout(silence);speechSynthesis.cancel();try{rec&&rec.abort()}catch(e){}
+  if(!active)return;active=false;log("End call dabaya");clearInterval(tick);clearTimeout(silence);speechSynthesis.cancel();try{rec&&rec.abort()}catch(e){}
   setState("Saving call...");const dur=Math.floor((Date.now()-t0)/1000);
   const blob=await new Promise(r=>{mr.onstop=()=>r(new Blob(chunks,{type:"audio/webm"}));mr.stop()});
   stream.getTracks().forEach(t=>t.stop());
@@ -123,6 +134,13 @@ async function loadHistory(){
   const calls=await (await fetch("/api/calls")).json();
   $("history").innerHTML=calls.length?calls.map(c=>`<div class="call">${callHtml(c)}</div>`).join(""):'<div class="empty">No calls yet.</div>';
 }
+function sendTyped(){
+  const t=$("txt").value.trim();
+  if(!active)return alert("Pehle Start call dabao.");
+  if(!t||busy)return;
+  $("txt").value="";try{rec&&rec.abort()}catch(e){}speechSynthesis.cancel();speaking=false;handle(t);
+}
 speechSynthesis.getVoices();speechSynthesis.onvoiceschanged=()=>{};
-$("start").onclick=startCall;$("end").onclick=endCall;loadHistory();
+$("start").onclick=startCall;$("end").onclick=endCall;$("send").onclick=sendTyped;
+$("txt").addEventListener("keydown",e=>{if(e.key==="Enter")sendTyped()});loadHistory();
 </script></body></html>
