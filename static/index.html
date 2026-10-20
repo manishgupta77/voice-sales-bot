@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FlowDesk Voice Sales Bot</title>
+<style>
+:root{--bg:#f6f7f4;--card:#fff;--ink:#1c2420;--mute:#66726b;--line:#dfe4dd;--accent:#0f6b4f;--red:#b3362b}
+@media(prefers-color-scheme:dark){:root{--bg:#121714;--card:#1a211d;--ink:#e8eee9;--mute:#97a39b;--line:#2b352f;--accent:#4cc79a;--red:#ef7a6e}}
+*{box-sizing:border-box}body{margin:0;font:16px/1.5 Georgia,serif;background:var(--bg);color:var(--ink)}
+main{max-width:960px;margin:0 auto;padding:24px 16px;display:grid;gap:20px}
+h1{margin:0;font-size:1.6rem}h2{margin:0 0 10px;font-size:1.15rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+.bar{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+button,select{font:inherit;padding:9px 16px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+button{cursor:pointer;font-weight:bold}#start{background:var(--accent);color:#fff;border:0}#end{background:var(--red);color:#fff;border:0}
+button:disabled{opacity:.4;cursor:not-allowed}button:focus-visible,select:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+#timer{font-variant-numeric:tabular-nums;font-size:1.3rem}#state{color:var(--mute)}
+#chat{height:320px;overflow-y:auto;display:flex;flex-direction:column;gap:8px}
+.m{max-width:80%;padding:8px 12px;border-radius:10px;border:1px solid var(--line)}
+.bot{align-self:flex-start}.me{align-self:flex-end;background:var(--accent);color:#fff;border:0}
+.badge{display:inline-block;padding:2px 10px;border-radius:99px;border:1px solid var(--accent);color:var(--accent);font-weight:bold;font-size:.85rem}
+.call{border-top:1px solid var(--line);padding:12px 0}.call:first-child{border:0}
+details{margin-top:6px;color:var(--mute)}audio{width:100%;margin-top:8px}.empty{color:var(--mute)}
+</style></head><body><main>
+<header><h1>FlowDesk Voice Sales Bot</h1>
+<div class="empty">Riya talks to you about FlowDesk, a CRM for small businesses. Use Chrome or Edge.</div></header>
+
+<section class="card"><div class="bar">
+<select id="lang" aria-label="Language"><option value="en-IN">English</option><option value="hi-IN">हिन्दी (Hindi)</option><option value="te-IN">తెలుగు (Telugu)</option></select>
+<label><input type="checkbox" id="consent"> I agree to this call being recorded</label>
+</div><div class="bar" style="margin-top:12px">
+<button id="start">Start call</button><button id="end" disabled>End call</button>
+<span id="timer">00:00</span><span id="state">Idle</span></div></section>
+
+<section class="card"><h2>Live chat</h2><div id="chat" aria-live="polite"><div class="empty">Start a call to begin the conversation.</div></div></section>
+
+<section class="card" id="result" hidden><h2>Call result</h2><div id="resultBody"></div></section>
+
+<section class="card"><h2>Call history</h2><div id="history"><div class="empty">No calls yet.</div></div></section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const GREET={"en-IN":"Hello! I'm Riya from FlowDesk. We help small businesses manage leads and customers. Do you have a minute to talk?",
+"hi-IN":"नमस्ते! मैं रिया बोल रही हूँ, FlowDesk से। हम छोटे बिज़नेस को लीड्स और कस्टमर्स मैनेज करने में मदद करते हैं। क्या आपके पास एक मिनट है?",
+"te-IN":"నమస్కారం! నేను రియా, FlowDesk నుండి మాట్లాడుతున్నాను. చిన్న వ్యాపారాల లీడ్స్ నిర్వహణలో మేము సహాయం చేస్తాము. మీకు ఒక నిమిషం ఉందా?"};
+let active=false,lang,msgs=[],rec,stream,mr,chunks=[],t0,tick,busy=false,speaking=false;
+let buf="",silence=null;
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const setState=s=>$("state").textContent=s;
+
+function add(role,text){
+  msgs.push({role,text});
+  const c=$("chat"); if(msgs.length==1)c.innerHTML="";
+  const d=document.createElement("div");d.className="m "+(role=="user"?"me":"bot");d.textContent=text;c.appendChild(d);c.scrollTop=c.scrollHeight;
+}
+function speak(text){
+  return new Promise(res=>{
+    speechSynthesis.cancel();speaking=true;setState("Riya is speaking...");
+    const u=new SpeechSynthesisUtterance(text);u.lang=lang;
+    const v=speechSynthesis.getVoices().find(v=>v.lang.replace("_","-").startsWith(lang.slice(0,2)));if(v)u.voice=v;
+    u.onend=u.onerror=()=>{speaking=false;res()};speechSynthesis.speak(u);
+  });
+}
+function listen(){
+  if(!active||busy||speaking)return;
+  rec=new SR();rec.lang=lang;rec.continuous=true;rec.interimResults=true;
+  rec.onstart=()=>setState("Listening... (bolo)");
+  rec.onresult=e=>{
+    let t="";for(let i=0;i<e.results.length;i++)t+=e.results[i][0].transcript;
+    buf=t;setState("Listening: "+t);clearTimeout(silence);
+    silence=setTimeout(()=>{const x=buf.trim();buf="";try{rec.stop()}catch(e){}if(x)handle(x)},1800);
+  };
+  rec.onend=()=>{if(active&&!busy&&!speaking)setTimeout(listen,300)};
+  rec.onerror=()=>{};
+  try{rec.start()}catch(e){}
+}
+async function handle(text){
+  busy=true;add("user",text);setState("Thinking...");
+  try{
+    const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:msgs,lang})});
+    const {reply}=await r.json();if(!active)return;
+    add("assistant",reply);await speak(reply);
+  }catch(e){setState("Server error")}
+  busy=false;listen();
+}
+async function startCall(){
+  if(!SR)return alert("Speech recognition is not supported. Please use Chrome or Edge.");
+  if(!$("consent").checked)return alert("Please tick the recording consent box first.");
+  try{stream=await navigator.mediaDevices.getUserMedia({audio:true})}catch(e){return alert("Microphone access is needed.")}
+  lang=$("lang").value;msgs=[];chunks=[];active=true;$("chat").innerHTML="";$("result").hidden=true;
+  mr=new MediaRecorder(stream);mr.ondataavailable=e=>chunks.push(e.data);mr.start();
+  t0=Date.now();tick=setInterval(()=>{const s=Math.floor((Date.now()-t0)/1000);$("timer").textContent=String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0")},500);
+  $("start").disabled=true;$("end").disabled=false;$("lang").disabled=true;$("consent").disabled=true;
+  const g=GREET[lang];add("assistant",g);await speak(g);listen();
+}
+async function endCall(){
+  if(!active)return;active=false;clearInterval(tick);clearTimeout(silence);speechSynthesis.cancel();try{rec&&rec.abort()}catch(e){}
+  setState("Saving call...");const dur=Math.floor((Date.now()-t0)/1000);
+  const blob=await new Promise(r=>{mr.onstop=()=>r(new Blob(chunks,{type:"audio/webm"}));mr.stop()});
+  stream.getTracks().forEach(t=>t.stop());
+  const fd=new FormData();fd.append("audio",blob,"call.webm");fd.append("transcript",JSON.stringify(msgs));fd.append("duration",dur);
+  try{
+    const call=await (await fetch("/api/finish",{method:"POST",body:fd})).json();
+    $("result").hidden=false;$("resultBody").innerHTML=callHtml(call);
+    loadHistory();
+  }catch(e){alert("Could not save the call.")}
+  $("start").disabled=false;$("end").disabled=true;$("lang").disabled=false;$("consent").disabled=false;$("consent").checked=false;setState("Idle");
+}
+function callHtml(c){
+  return `<div><span class="badge">${esc(c.status)}</span> <span class="empty">${esc(c.time)} · ${c.duration}s</span></div>
+  <p>${esc(c.summary)}</p><p><b>Requirements:</b> ${esc(c.requirements)}<br><b>Objections:</b> ${esc(c.objections)}<br><b>Next steps:</b> ${esc(c.next_steps)}</p>
+  ${c.recording?`<audio controls src="/recordings/${c.recording}"></audio>`:""}
+  <details><summary>Transcript</summary>${c.transcript.map(m=>`<div><b>${m.role=="user"?"Customer":"Riya"}:</b> ${esc(m.text)}</div>`).join("")||"No messages."}</details>`;
+}
+async function loadHistory(){
+  const calls=await (await fetch("/api/calls")).json();
+  $("history").innerHTML=calls.length?calls.map(c=>`<div class="call">${callHtml(c)}</div>`).join(""):'<div class="empty">No calls yet.</div>';
+}
+speechSynthesis.getVoices();speechSynthesis.onvoiceschanged=()=>{};
+$("start").onclick=startCall;$("end").onclick=endCall;loadHistory();
+</script></body></html>
