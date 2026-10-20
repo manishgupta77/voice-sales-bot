@@ -42,7 +42,7 @@ const $=id=>document.getElementById(id);
 const GREET={"en-IN":"Hello! I'm Riya from FlowDesk. We help small businesses manage leads and customers. Do you have a minute to talk?",
 "hi-IN":"नमस्ते! मैं रिया बोल रही हूँ, FlowDesk से। हम छोटे बिज़नेस को लीड्स और कस्टमर्स मैनेज करने में मदद करते हैं। क्या आपके पास एक मिनट है?",
 "te-IN":"నమస్కారం! నేను రియా, FlowDesk నుండి మాట్లాడుతున్నాను. చిన్న వ్యాపారాల లీడ్స్ నిర్వహణలో మేము సహాయం చేస్తాము. మీకు ఒక నిమిషం ఉందా?"};
-let active=false,lang,msgs=[],rec,stream,mr,chunks=[],t0,tick,busy=false,speaking=false;
+let active=false,lang,msgs=[],rec,stream,mr,chunks=[],t0,tick,busy=false,speaking=false,blocked=false;
 let buf="",silence=null;
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -58,11 +58,14 @@ function speak(text){
     speechSynthesis.cancel();speaking=true;setState("Riya is speaking...");
     const u=new SpeechSynthesisUtterance(text);u.lang=lang;
     const v=speechSynthesis.getVoices().find(v=>v.lang.replace("_","-").startsWith(lang.slice(0,2)));if(v)u.voice=v;
-    u.onend=u.onerror=()=>{speaking=false;res()};speechSynthesis.speak(u);
+    let done=false,guard=null;
+    const fin=()=>{if(done)return;done=true;clearTimeout(guard);speaking=false;res()};
+    guard=setTimeout(fin,Math.max(4000,text.length*90));
+    u.onend=fin;u.onerror=fin;speechSynthesis.speak(u);
   });
 }
 function listen(){
-  if(!active||busy||speaking)return;
+  if(!active||busy||speaking||blocked)return;
   rec=new SR();rec.lang=lang;rec.continuous=true;rec.interimResults=true;
   rec.onstart=()=>setState("Listening... (bolo)");
   rec.onresult=e=>{
@@ -70,9 +73,13 @@ function listen(){
     buf=t;setState("Listening: "+t);clearTimeout(silence);
     silence=setTimeout(()=>{const x=buf.trim();buf="";try{rec.stop()}catch(e){}if(x)handle(x)},1800);
   };
-  rec.onend=()=>{if(active&&!busy&&!speaking)setTimeout(listen,300)};
-  rec.onerror=()=>{};
-  try{rec.start()}catch(e){}
+  rec.onend=()=>{if(active&&!busy&&!speaking&&!blocked)setTimeout(listen,300)};
+  rec.onerror=e=>{
+    if(e.error==="not-allowed"||e.error==="service-not-allowed"){blocked=true;setState("Mic blocked: browser me Microphone ko Allow karo, phir naya call karo")}
+    else if(e.error==="network"){setState("Speech service network error, dobara try ho raha hai...")}
+    else if(e.error!=="no-speech"&&e.error!=="aborted"){setState("Mic error: "+e.error)}
+  };
+  try{rec.start()}catch(e){setState("Mic start error: "+e.message)}
 }
 async function handle(text){
   busy=true;add("user",text);setState("Thinking...");
@@ -86,8 +93,8 @@ async function handle(text){
 async function startCall(){
   if(!SR)return alert("Speech recognition is not supported. Please use Chrome or Edge.");
   if(!$("consent").checked)return alert("Please tick the recording consent box first.");
-  try{stream=await navigator.mediaDevices.getUserMedia({audio:true})}catch(e){return alert("Microphone access is needed.")}
-  lang=$("lang").value;msgs=[];chunks=[];active=true;$("chat").innerHTML="";$("result").hidden=true;
+  try{stream=await navigator.mediaDevices.getUserMedia({audio:true})}catch(e){return alert("Microphone access is needed. Address bar ke lock icon se Microphone ko Allow karo.")}
+  lang=$("lang").value;msgs=[];chunks=[];active=true;blocked=false;busy=false;$("chat").innerHTML="";$("result").hidden=true;
   mr=new MediaRecorder(stream);mr.ondataavailable=e=>chunks.push(e.data);mr.start();
   t0=Date.now();tick=setInterval(()=>{const s=Math.floor((Date.now()-t0)/1000);$("timer").textContent=String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0")},500);
   $("start").disabled=true;$("end").disabled=false;$("lang").disabled=true;$("consent").disabled=true;
