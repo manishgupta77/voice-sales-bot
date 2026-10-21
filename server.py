@@ -8,22 +8,25 @@ os.makedirs("recordings", exist_ok=True)
 DB = "calls.json"
 KEY = os.getenv("GEMINI_API_KEY", "").strip()
 MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+FALLBACK = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite")
 STATUSES = ["Converted", "Interested", "Follow-up Required", "Not Interested", "Demo Requested", "No Response"]
 
-SYSTEM = """You are Riya, a friendly, smart voice assistant who also works as a sales agent for FlowDesk, a SaaS CRM for small businesses.
-Plans: Starter Rs 499/user/month, Pro Rs 999/user/month, 14-day free trial, free demo available.
-Features: lead tracking, WhatsApp/email automation, reports, mobile app.
+DEFAULT_PRODUCT = "FlowDesk"
+DEFAULT_DETAILS = ("FlowDesk is a CRM for small businesses. Plans: Starter Rs 499/user/month, Pro Rs 999/user/month, "
+                   "14-day free trial, free demo available. Features: lead tracking, WhatsApp/email automation, reports, mobile app.")
+
+SYSTEM = """You are Riya, a friendly, smart voice assistant who also works as a sales agent for {product}, a SaaS product.
+Product details given by the business: {details}
+Use only these details for facts such as pricing and features. If something is not listed, do not invent it; say you will check and offer a free demo or a follow-up instead.
 You are on a VOICE call: speak naturally, no markdown, no lists, no bullet points.
 Reply ONLY in this language: {lang}.
 Rules:
 - ALWAYS answer exactly what the customer asked, first and directly, on ANY topic (for example AI, machine learning, business, technology, general knowledge). Never refuse a harmless question and never dodge it to pitch the product.
 - For simple questions reply in 1-3 short sentences. For explanations, use at most 4 short spoken sentences with a simple example.
-- Mention FlowDesk only when it is relevant to what the customer said or asked about our product, price, features or demo. Do not force a sales pitch into every reply.
-- Never repeat the name FlowDesk in every reply. The customer already knows it from your greeting.
-- If the customer shows interest in a CRM, or the topic connects to their business, you may end with one short, soft question about their needs or offer a free trial or demo. Ask at most one question at a time.
+- Mention {product} only when it is relevant to what the customer said or asked about the product, price, features or demo. Do not force a sales pitch into every reply.
+- Never repeat the name {product} in every reply. The customer already knows it from your greeting.
+- If the customer shows interest, or the topic connects to their business, you may end with one short, soft question about their needs or offer a free trial or demo. Ask at most one question at a time.
 - If you are not sure about a fact, say so honestly instead of guessing."""
-
-FALLBACK = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite")
 
 def gemini(system, contents, as_json=False):
     body = {"system_instruction": {"parts": [{"text": system}]}, "contents": contents}
@@ -43,18 +46,16 @@ def gemini(system, contents, as_json=False):
             time.sleep(2)
     raise RuntimeError(last)
 
-def rule_reply(text, lang):
+def rule_reply(text, lang, product):
     t = text.lower()
     hi = lang.startswith("hi")
-    if re.search(r"price|cost|kitn|rate|कीमत|कितना", t):
-        return "Starter plan 499 rupaye per user per month hai aur Pro 999. 14 din ka free trial bhi hai. Aapki team me kitne log hain?" if hi else "Our Starter plan is 499 rupees per user per month and Pro is 999, with a 14-day free trial. How many people are on your team?"
     if re.search(r"demo|डेमो", t):
         return "Zaroor! Main aapke liye free demo book kar deti hoon. Aapko kaunsa time suit karega?" if hi else "Sure! I can book a free demo for you. What time works best?"
-    if re.search(r"feature|kya karta|what does|क्या", t):
-        return "FlowDesk lead tracking, WhatsApp automation aur reports deta hai. Aap abhi leads kaise manage karte hain?" if hi else "FlowDesk gives you lead tracking, WhatsApp and email automation, and reports. How do you manage leads today?"
     if re.search(r"not interested|no thanks|nahi chahiye|नहीं", t):
         return "Koi baat nahi, aapke time ke liye shukriya. Zarurat ho to zaroor bataiye." if hi else "No problem, thanks for your time. Reach out anytime you need us."
-    return "Achha, aur batayiye, aapki sabse badi problem kya hai?" if hi else "Got it. Could you tell me more about what you need from a CRM?"
+    if re.search(r"price|cost|kitn|rate|कीमत|कितना|feature|kya karta|what does|क्या", t):
+        return f"{product} ke price aur features main free demo me dikha sakti hoon. Aapko sabse zyada kis cheez ki zarurat hai?" if hi else f"I can walk you through {product}'s pricing and features in a free demo. What do you need most?"
+    return "Achha, aur batayiye, aapki sabse badi problem kya hai?" if hi else "Got it. Could you tell me more about what you need?"
 
 def heuristic_status(user_texts):
     if not user_texts: return "No Response"
@@ -76,21 +77,25 @@ def index():
 def chat():
     d = request.json
     msgs, lang = d["messages"], d.get("lang", "en-IN")
+    product = (d.get("product") or DEFAULT_PRODUCT).strip()[:80]
+    details = (d.get("details") or DEFAULT_DETAILS).strip()[:1500]
     if KEY:
         try:
             lname = {"en": "English", "hi": "Hindi (Devanagari)", "te": "Telugu"}[lang[:2]]
             contents = [{"role": "user", "parts": [{"text": "(call started)"}]}]
             for m in msgs:
                 contents.append({"role": "user" if m["role"] == "user" else "model", "parts": [{"text": m["text"]}]})
-            return jsonify(reply=gemini(SYSTEM.format(lang=lname), contents).strip())
+            system = SYSTEM.format(product=product, details=details, lang=lname)
+            return jsonify(reply=gemini(system, contents).strip())
         except Exception as e:
             print("Gemini error:", e)
-    return jsonify(reply=rule_reply(msgs[-1]["text"], lang))
+    return jsonify(reply=rule_reply(msgs[-1]["text"], lang, product))
 
 @app.post("/api/finish")
 def finish():
     transcript = json.loads(request.form["transcript"])
     duration = int(request.form.get("duration", 0))
+    product = (request.form.get("product") or DEFAULT_PRODUCT).strip()[:80]
     cid = uuid.uuid4().hex[:10]
     audio = request.files.get("audio")
     rec = None
@@ -102,8 +107,8 @@ def finish():
     if KEY and user_texts:
         try:
             convo = "\n".join(f"{m['role']}: {m['text']}" for m in transcript)
-            prompt = ("Analyse this sales call. Return JSON with keys: summary (2-3 sentences), requirements (string), "
-                      f"objections (string), next_steps (string), status (one of {STATUSES}).\n\n{convo}")
+            prompt = (f"Analyse this sales call for the product '{product}'. Return JSON with keys: summary (2-3 sentences), "
+                      f"requirements (string), objections (string), next_steps (string), status (one of {STATUSES}).\n\n{convo}")
             info = json.loads(gemini("You are a sales call analyst. Answer in English.", [{"role": "user", "parts": [{"text": prompt}]}], True))
             if info.get("status") not in STATUSES: info["status"] = heuristic_status(user_texts)
         except Exception as e:
@@ -113,7 +118,7 @@ def finish():
                 "requirements": "See transcript.", "objections": "See transcript.",
                 "next_steps": "Follow up with the customer." if user_texts else "Retry the call.",
                 "status": heuristic_status(user_texts)}
-    call = {"id": cid, "time": time.strftime("%d %b %Y, %I:%M %p"), "duration": duration,
+    call = {"id": cid, "time": time.strftime("%d %b %Y, %I:%M %p"), "duration": duration, "product": product,
             "recording": rec, "transcript": transcript, **info}
     db = load(); db.insert(0, call)
     json.dump(db, open(DB, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
@@ -129,9 +134,4 @@ def recordings(f):
 
 if __name__ == "__main__":
     print("AI mode:", "Gemini" if KEY else "Demo mode (no API key)", "| model:", MODEL)
-    if KEY:
-        try:
-            print("Gemini TEST OK:", gemini("Reply briefly.", [{"role": "user", "parts": [{"text": "Say hi"}]}])[:60])
-        except Exception as e:
-            print("Gemini TEST FAILED ->", e)
     app.run(port=5000, debug=False)
