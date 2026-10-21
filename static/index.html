@@ -83,9 +83,10 @@ function listen(){
   rec.onaudiostart=()=>log("mic audio mil raha hai");
   rec.onspeechstart=()=>log("awaaz detect hui");
   rec.onresult=e=>{
+    if(busy)return;
     let t="";for(let i=0;i<e.results.length;i++)t+=e.results[i][0].transcript;
     buf=t;setState("Listening: "+t);log("suna: "+t);clearTimeout(silence);
-    silence=setTimeout(()=>{const x=buf.trim();buf="";try{rec.stop()}catch(e){}if(x)handle(x)},1800);
+    silence=setTimeout(()=>{const x=buf.trim();buf="";if(busy||x.length<3||/^(uh|um|uhm|hmm|ah|oh|er)[.!?]?$/i.test(x))return;try{rec.stop()}catch(e){}handle(x)},1800);
   };
   rec.onend=()=>{log("recognition END");if(active&&!busy&&!speaking&&!blocked)setTimeout(listen,300)};
   rec.onerror=e=>{
@@ -97,6 +98,7 @@ function listen(){
   try{rec.start()}catch(e){log("rec.start FAIL: "+e.message);setState("Mic start error: "+e.message)}
 }
 async function handle(text){
+  if(busy)return;clearTimeout(silence);buf="";
   busy=true;add("user",text);setState("Thinking...");log("server ko bheja: "+text);
   try{
     const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:msgs,lang,product,details:$("pdesc").value})});
