@@ -24,41 +24,58 @@ details{margin-top:6px;color:var(--mute)}audio{width:100%;margin-top:8px}.empty{
 #log{margin:8px 0 0;font:12px/1.5 monospace;white-space:pre-wrap;color:var(--mute);max-height:200px;overflow:auto}
 </style></head><body><main>
 <header><h1>AI Voice Sales Bot</h1>
-<div class="empty">Riya is an AI sales agent. Enter any SaaS product below and she will sell it on a live voice call. Use Chrome or Edge.</div></header>
+<div class="empty">An AI sales agent will sell any SaaS product or service you enter below, on a live voice call. Use Chrome or Edge.</div></header>
 
-<section class="card"><h2>Product to sell</h2>
-<label class="f">Product name<br><input type="text" id="pname" value="FlowDesk" maxlength="80" style="width:100%;margin-top:8px"></label>
-<label class="f" style="margin:0">Product details (features, pricing, offers)<br>
+<section class="card"><h2>Product / Service to sell</h2>
+<label class="f">Product or service name<br><input type="text" id="pname" value="FlowDesk" maxlength="80" style="width:100%;margin-top:8px"></label>
+<label class="f">Sales agent name (jo bolega)<br><input type="text" id="aname" value="Riya" maxlength="30" style="width:100%;margin-top:8px"></label>
+<label class="f" style="margin:0">Product or service details (features, pricing, offers)<br>
 <textarea id="pdesc" rows="3" maxlength="1500">FlowDesk is a CRM for small businesses. Plans: Starter Rs 499/user/month, Pro Rs 999/user/month, 14-day free trial, free demo available. Features: lead tracking, WhatsApp/email automation, reports, mobile app.</textarea></label></section>
 
 <section class="card"><div class="bar">
 <select id="lang" aria-label="Language"><option value="en-IN">English</option><option value="hi-IN">हिन्दी (Hindi)</option><option value="te-IN">తెలుగు (Telugu)</option></select>
+<select id="voice" aria-label="Voice"><option value="">Auto (female voice)</option></select>
 <label><input type="checkbox" id="consent"> I agree to this call being recorded</label>
 </div><div class="bar" style="margin-top:12px">
-<button id="start">Start call</button><button id="end" disabled>End call</button>
+<button id="start">🎤 Start Mic</button><button id="end" disabled>🎤 End Mic</button>
 <span id="timer">00:00</span><span id="state">Idle</span></div></section>
 
-<section class="card"><h2>Live chat</h2><div id="chat" aria-live="polite"><div class="empty">Start a call to begin the conversation.</div></div>
+<section class="card"><h2>Live chat</h2><div id="chat" aria-live="polite"><div class="empty">Press Start Mic to begin the conversation.</div></div>
 <div class="bar" style="margin-top:12px"><input type="text" id="txt" placeholder="Mic na chale to yahan type karo" style="flex:1;min-width:200px"><button id="send">Send</button></div></section>
 
 <section class="card" id="result" hidden><h2>Call result</h2><div id="resultBody"></div></section>
 
-<section class="card"><h2>Call history</h2><div id="history"><div class="empty">No calls yet.</div></div></section>
+<section class="card"><h2>Call history</h2><div class="empty" style="margin-bottom:8px">Your calls are saved on the server and are visible only to you (this browser).</div><div id="history"><div class="empty">No calls yet.</div></div></section>
 
 <section class="card"><details style="margin:0"><summary>Debug log (mic problem ho to dekho)</summary><pre id="log">Abhi koi event nahi.</pre></details></section>
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const GREET={"en-IN":n=>`Hello! I'm Riya from ${n}. Do you have a minute to talk?`,
-"hi-IN":n=>`नमस्ते! मैं रिया बोल रही हूँ, ${n} से। क्या आपके पास एक मिनट है?`,
-"te-IN":n=>`నమస్కారం! నేను రియా, ${n} నుండి మాట్లాడుతున్నాను. మీకు ఒక నిమిషం ఉందా?`};
-let active=false,lang,msgs=[],rec,stream,mr,chunks=[],t0,tick,busy=false,speaking=false,blocked=false,product="";
+const ADMIN=new URLSearchParams(location.search).get("admin")||"";
+const AQ=ADMIN?"?admin="+encodeURIComponent(ADMIN):"";
+const GREET={"en-IN":(a,n)=>`Hello! I'm ${a} from ${n}. Do you have a minute to talk?`,
+"hi-IN":(a,n)=>`नमस्ते! मैं ${a} हूँ, ${n} से। क्या आपके पास एक मिनट है?`,
+"te-IN":(a,n)=>`నమస్కారం! నేను ${a}, ${n} నుండి మాట్లాడుతున్నాను. మీకు ఒక నిమిషం ఉందా?`};
+let active=false,lang,msgs=[],rec,stream,mr,chunks=[],t0,tick,busy=false,speaking=false,blocked=false,product="",agent="";
 let buf="",silence=null;const L=[];
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const setState=s=>$("state").textContent=s;
 function log(s){L.push(new Date().toLocaleTimeString()+"  "+s);$("log").textContent=L.slice(-14).join("\n")}
 
+function fillVoices(){
+  const vs=speechSynthesis.getVoices(),pre=$("lang").value.slice(0,2),sel=$("voice"),prev=sel.value;
+  sel.innerHTML='<option value="">Auto (female voice)</option>'+vs.filter(v=>v.lang.replace("_","-").toLowerCase().startsWith(pre)).map(v=>`<option value="${esc(v.voiceURI)}">${esc(v.name)}</option>`).join("");
+  if([...sel.options].some(o=>o.value===prev))sel.value=prev;
+}
+function pickVoice(){
+  const vs=speechSynthesis.getVoices(),pre=lang.slice(0,2);
+  const chosen=$("voice").value;
+  if(chosen){const m=vs.find(v=>v.voiceURI===chosen);if(m)return m}
+  const pool=vs.filter(v=>v.lang.replace("_","-").toLowerCase().startsWith(pre));
+  const fem=/female|zira|heera|kalpana|swara|neerja|samantha|veena|aria|jenny|hazel|susan|sonia|natasha|priya|lekha|shruti|google us english|google uk english female|google हिन्दी/i;
+  return pool.find(v=>fem.test(v.name))||pool[0]||null;
+}
 function add(role,text){
   msgs.push({role,text});
   const c=$("chat"); if(msgs.length==1)c.innerHTML="";
@@ -66,11 +83,11 @@ function add(role,text){
 }
 function speak(text){
   return new Promise(res=>{
-    speechSynthesis.cancel();speaking=true;setState("Riya is speaking...");log("Riya bolna shuru");
+    speechSynthesis.cancel();speaking=true;setState(agent+" is speaking...");log(agent+" bolna shuru");
     const u=new SpeechSynthesisUtterance(text);u.lang=lang;
-    const v=speechSynthesis.getVoices().find(v=>v.lang.replace("_","-").startsWith(lang.slice(0,2)));if(v)u.voice=v;
+    const v=pickVoice();if(v){u.voice=v;log("voice: "+v.name)}
     let done=false,guard=null;
-    const fin=()=>{if(done)return;done=true;clearTimeout(guard);speaking=false;log("Riya bolna khatam");res()};
+    const fin=()=>{if(done)return;done=true;clearTimeout(guard);speaking=false;log(agent+" bolna khatam");res()};
     guard=setTimeout(fin,Math.max(4000,text.length*90));
     u.onend=fin;u.onerror=fin;speechSynthesis.speak(u);
   });
@@ -101,32 +118,33 @@ async function handle(text){
   if(busy)return;clearTimeout(silence);buf="";
   busy=true;add("user",text);setState("Thinking...");log("server ko bheja: "+text);
   try{
-    const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:msgs,lang,product,details:$("pdesc").value})});
+    const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:msgs,lang,product,agent,details:$("pdesc").value})});
     const {reply}=await r.json();if(!active)return;
     log("jawab aaya");add("assistant",reply);await speak(reply);
   }catch(e){setState("Server error");log("server error: "+e.message)}
   busy=false;listen();
 }
-function lockInputs(v){["start","lang","consent","pname","pdesc"].forEach(i=>$(i).disabled=v);$("end").disabled=!v}
+function lockInputs(v){["start","lang","voice","consent","pname","aname","pdesc"].forEach(i=>$(i).disabled=v);$("end").disabled=!v}
 async function startCall(){
-  L.length=0;log("Start dabaya. Browser SpeechRecognition: "+(SR?"hai":"NAHI hai"));
+  L.length=0;log("Start Mic dabaya. Browser SpeechRecognition: "+(SR?"hai":"NAHI hai"));
   if(!SR)return alert("Speech recognition is not supported. Please use Chrome or Edge.");
   if(!$("consent").checked)return alert("Please tick the recording consent box first.");
-  product=$("pname").value.trim();if(!product)return alert("Please enter a product name.");
+  product=$("pname").value.trim();if(!product)return alert("Please enter a product or service name.");
+  agent=$("aname").value.trim()||"Riya";
   try{stream=await navigator.mediaDevices.getUserMedia({audio:true});log("mic stream OK")}
   catch(e){log("getUserMedia FAIL: "+e.name+" "+e.message);return alert("Microphone access is needed. Address bar ke lock icon se Microphone ko Allow karo.")}
   lang=$("lang").value;msgs=[];chunks=[];active=true;blocked=false;busy=false;$("chat").innerHTML="";$("result").hidden=true;
   mr=new MediaRecorder(stream);mr.ondataavailable=e=>chunks.push(e.data);mr.start();
   t0=Date.now();tick=setInterval(()=>{const s=Math.floor((Date.now()-t0)/1000);$("timer").textContent=String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0")},500);
   lockInputs(true);
-  const g=GREET[lang](product);add("assistant",g);await speak(g);listen();
+  const g=GREET[lang](agent,product);add("assistant",g);await speak(g);listen();
 }
 async function endCall(){
-  if(!active)return;active=false;log("End call dabaya");clearInterval(tick);clearTimeout(silence);speechSynthesis.cancel();try{rec&&rec.abort()}catch(e){}
+  if(!active)return;active=false;log("End Mic dabaya");clearInterval(tick);clearTimeout(silence);speechSynthesis.cancel();try{rec&&rec.abort()}catch(e){}
   setState("Saving call...");const dur=Math.floor((Date.now()-t0)/1000);
   const blob=await new Promise(r=>{mr.onstop=()=>r(new Blob(chunks,{type:"audio/webm"}));mr.stop()});
   stream.getTracks().forEach(t=>t.stop());
-  const fd=new FormData();fd.append("audio",blob,"call.webm");fd.append("transcript",JSON.stringify(msgs));fd.append("duration",dur);fd.append("product",product);
+  const fd=new FormData();fd.append("audio",blob,"call.webm");fd.append("transcript",JSON.stringify(msgs));fd.append("duration",dur);fd.append("product",product);fd.append("agent",agent);
   try{
     const call=await (await fetch("/api/finish",{method:"POST",body:fd})).json();
     $("result").hidden=false;$("resultBody").innerHTML=callHtml(call);
@@ -137,20 +155,21 @@ async function endCall(){
 function callHtml(c){
   return `<div><span class="badge">${esc(c.status)}</span> <span class="empty">${esc(c.time)} · ${c.duration}s${c.product?" · "+esc(c.product):""}</span></div>
   <p>${esc(c.summary)}</p><p><b>Requirements:</b> ${esc(c.requirements)}<br><b>Objections:</b> ${esc(c.objections)}<br><b>Next steps:</b> ${esc(c.next_steps)}</p>
-  ${c.recording?`<audio controls src="/recordings/${c.recording}"></audio>`:""}
-  <details><summary>Transcript</summary>${c.transcript.map(m=>`<div><b>${m.role=="user"?"Customer":"Riya"}:</b> ${esc(m.text)}</div>`).join("")||"No messages."}</details>`;
+  ${c.recording?`<audio controls src="/recordings/${c.recording}${AQ}"></audio>`:""}
+  <details><summary>Transcript</summary>${c.transcript.map(m=>`<div><b>${m.role=="user"?"Customer":esc(c.agent||"Agent")}:</b> ${esc(m.text)}</div>`).join("")||"No messages."}</details>`;
 }
 async function loadHistory(){
-  const calls=await (await fetch("/api/calls")).json();
+  const calls=await (await fetch("/api/calls"+AQ)).json();
   $("history").innerHTML=calls.length?calls.map(c=>`<div class="call">${callHtml(c)}</div>`).join(""):'<div class="empty">No calls yet.</div>';
 }
 function sendTyped(){
   const t=$("txt").value.trim();
-  if(!active)return alert("Pehle Start call dabao.");
+  if(!active)return alert("Pehle Start Mic dabao.");
   if(!t||busy)return;
   $("txt").value="";try{rec&&rec.abort()}catch(e){}speechSynthesis.cancel();speaking=false;handle(t);
 }
-speechSynthesis.getVoices();speechSynthesis.onvoiceschanged=()=>{};
+speechSynthesis.getVoices();speechSynthesis.onvoiceschanged=fillVoices;fillVoices();
+$("lang").onchange=fillVoices;
 $("start").onclick=startCall;$("end").onclick=endCall;$("send").onclick=sendTyped;
 $("txt").addEventListener("keydown",e=>{if(e.key==="Enter")sendTyped()});loadHistory();
 </script></body></html>
